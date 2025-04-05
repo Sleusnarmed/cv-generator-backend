@@ -1,137 +1,104 @@
-const express = require("express");
+const express = require('express');
 const router = express.Router();
-const { handleChat } = require("../services/gemini");
-const { getSession, updateSession } = require("../services/session");
+const { handleCVConversation } = require('../services/gemini');
+const { getSession, updateSession } = require('../services/session');
 
-// Initialize chat session for CV improvement
-router.post("/init", async (req, res) => {
+// Initialize CV session
+router.post('/init', async (req, res) => {
   try {
     const { userId } = req.body;
     let session = getSession(userId);
 
     if (!session) {
-      // Initial prompt based on user's CV knowledge
-      // In routes/chat.js
-      const initialPrompt = `You're a friendly CV advisor helping users improve their resumes. 
-
-When users DON'T know what a CV is:
-1. Briefly explain it's a document summarizing work history and skills
-2. Provide simple steps to create one
-3. Ask about their work experience
-
-When users DO know:
-1. Ask what specific help they need
-2. Provide technical optimization tips:
-   - ATS compatibility
-   - Achievement quantification
-   - Action verbs
-3. Offer to review specific sections
-
-Always:
-- Use simple, clear language
-- Break complex advice into bullet points
-- End by suggesting next steps
-- Maintain a friendly, professional tone
-
-Start by asking: "Do you know what a Curriculum Vitae (CV) is?"`;
-
-      const response = await handleChat(initialPrompt);
-
+      const { message } = await handleCVConversation(
+        "Saluda y ofrece ayuda con el CV en español"
+      );
+      
       session = {
         userId,
         chatHistory: [
-          { role: "system", content: initialPrompt },
-          { role: "assistant", content: response },
+          { role: 'assistant', content: message }
         ],
-        cvData: {},
+        cvData: {
+          personal: {},
+          education: [],
+          experience: [],
+          skills: { technical: [], soft: [] }
+        }
       };
       updateSession(userId, session);
     }
 
-    res.json({
-      message: session.chatHistory[session.chatHistory.length - 1].content,
-      sessionId: userId,
+    res.json({ 
+      message: session.chatHistory.slice(-1)[0].content,
+      sessionId: userId
     });
   } catch (error) {
-    console.error("Error initializing chat:", error);
-    res.status(500).json({ error: "Failed to initialize chat session" });
+    res.status(500).json({ 
+      error: error.message,
+      details: process.env.NODE_ENV === 'development' ? error.stack : undefined
+    });
   }
 });
 
-// In routes/chat.js - update the /send endpoint
+// Process CV conversation
 router.post('/send', async (req, res) => {
-    try {
-      const { userId, message } = req.body;
-      
-      if (!userId || !message) {
-        return res.status(400).json({ 
-          error: 'Se requieren userId y message' 
-        });
-      }
-  
-      let session = getSession(userId);
-      if (!session) {
-        return res.status(404).json({ 
-          error: 'Sesión no encontrada. Por favor, inicia una nueva conversación.' 
-        });
-      }
-  
-      // Add user message to history
-      session.chatHistory.push({ role: 'user', content: message });
-      
-      // Process with Gemini
-      const response = await handleChat(session.chatHistory);
-      
-      // Add assistant response to history
-      session.chatHistory.push({ role: 'assistant', content: response });
-      updateSession(userId, session);
-  
-      res.json({ 
-        message: response,
-        cvData: session.cvData 
-      });
-  
-    } catch (error) {
-      console.error('Full Error:', {
-        message: error.message,
-        stack: error.stack,
-        requestBody: req.body
-      });
-      
-      res.status(500).json({ 
-        error: 'Error procesando tu mensaje. Por favor intenta nuevamente.',
-        details: process.env.NODE_ENV === 'development' ? error.message : undefined
-      });
-    }
-  });
-
-// Get chat history
-router.get("/history/:userId", (req, res) => {
   try {
-    const session = getSession(req.params.userId);
+    const { userId, message } = req.body;
+    let session = getSession(userId);
+
     if (!session) {
-      return res.status(404).json({ error: "Session not found" });
+      return res.status(404).json({ error: 'Sesión no encontrada. Por favor inicia una nueva conversación.' });
     }
-    res.json(session.chatHistory);
+
+    // Add user message to history
+    session.chatHistory.push({ role: 'user', content: message });
+    
+    // Process with Gemini using full history
+    const { message: aiResponse, data } = await handleCVConversation(
+      session.chatHistory
+    );
+
+    // Update CV data
+    if (data) {
+      if (data.personal) {
+        session.cvData.personal = { ...session.cvData.personal, ...data.personal };
+      }
+      if (data.education) {
+        session.cvData.education = [...session.cvData.education, ...data.education];
+      }
+      if (data.experience) {
+        session.cvData.experience = [...session.cvData.experience, ...data.experience];
+      }
+      if (data.skills) {
+        session.cvData.skills = {
+          technical: [...new Set([...session.cvData.skills.technical, ...(data.skills.technical || [])])],
+          soft: [...new Set([...session.cvData.skills.soft, ...(data.skills.soft || [])])]
+        };
+      }
+    }
+
+    // Add AI response to history
+    session.chatHistory.push({ role: 'assistant', content: aiResponse });
+    updateSession(userId, session);
+
+    res.json({ 
+      message: aiResponse,
+      cvData: session.cvData
+    });
+
   } catch (error) {
-    console.error("Error fetching chat history:", error);
-    res.status(500).json({ error: "Failed to fetch chat history" });
+    console.error("Send Error:", {
+      userId,
+      error: error.message,
+      chatHistory: getSession(userId)?.chatHistory
+    });
+    
+    res.status(500).json({ 
+      error: "Hubo un problema procesando tu mensaje. Por favor inténtalo de nuevo.",
+      details: process.env.NODE_ENV === 'development' ? error.message : undefined
+    });
   }
 });
 
-// In routes/chat.js
-router.get('/test-gemini', async (req, res) => {
-    try {
-      const testPrompt = "Responde con 'OK' si estás funcionando correctamente";
-      const response = await handleChat(testPrompt);
-      res.json({ status: 'working', response });
-    } catch (error) {
-      console.error('Gemini Test Failed:', error);
-      res.status(500).json({ 
-        status: 'error',
-        error: 'Error connecting to Gemini',
-        details: error.message 
-      });
-    }
-  });
 module.exports = router;
