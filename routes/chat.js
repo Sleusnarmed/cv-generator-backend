@@ -3,6 +3,24 @@ const router = express.Router();
 const { handleCVConversation } = require("../services/gemini");
 const { getSession, updateSession } = require("../services/session");
 
+// Helper function to calculate CV completion progress
+function calculateCVProgress(cvData) {
+  let completed = 0;
+  const total = 4; // personal, education, experience, skills
+  
+  if (cvData.personal?.name) completed++;
+  if (cvData.education?.length > 0) completed++;
+  if (cvData.experience?.length > 0) completed++;
+  if (cvData.skills?.technical?.length > 0 || cvData.skills?.soft?.length > 0) completed++;
+  
+  return {
+    percentage: Math.round((completed / total) * 100),
+    completedFields: completed,
+    totalFields: total,
+    hasCompleteData: completed === total
+  };
+}
+
 // Initialize CV session
 router.post("/init", async (req, res) => {
   try {
@@ -11,7 +29,7 @@ router.post("/init", async (req, res) => {
 
     if (!session) {
       const { message } = await handleCVConversation(
-        "Saluda y ofrece ayuda con el CV en español"
+        "Iniciar nueva conversación de CV"
       );
 
       session = {
@@ -30,6 +48,7 @@ router.post("/init", async (req, res) => {
     res.json({
       message: session.chatHistory.slice(-1)[0].content,
       sessionId: userId,
+      cvProgress: calculateCVProgress(session.cvData)
     });
   } catch (error) {
     res.status(500).json({
@@ -40,7 +59,6 @@ router.post("/init", async (req, res) => {
 });
 
 // Process CV conversation
-// In your /send endpoint
 router.post("/send", async (req, res) => {
   try {
     const { userId, message } = req.body;
@@ -58,65 +76,21 @@ router.post("/send", async (req, res) => {
       session.chatHistory
     );
 
-    // NEW: Improved data extraction and merging
+    // Merge new data with existing
     if (data) {
-      // Merge personal info
       if (data.personal) {
-        session.cvData.personal = {
-          ...session.cvData.personal,
-          name:
-            data.personal.nombre ||
-            data.personal.name ||
-            session.cvData.personal.name,
-          email:
-            data.personal.email ||
-            data.personal.correo ||
-            session.cvData.personal.email,
-          phone:
-            data.personal.phone ||
-            data.personal.telefono ||
-            session.cvData.personal.phone,
-          location:
-            data.personal.location ||
-            data.personal.ubicacion ||
-            session.cvData.personal.location,
-        };
+        session.cvData.personal = { ...session.cvData.personal, ...data.personal };
       }
-
-      // Merge education
-      if (data.educacion || data.education) {
-        const edu = data.educacion || data.education;
-        session.cvData.education = [
-          {
-            degree: edu.titulo || edu.degree || "",
-            university: edu.universidad || edu.university || "",
-            start: edu.fechas ? edu.fechas.split(" - ")[0] : edu.start || "",
-            end: edu.fechas ? edu.fechas.split(" - ")[1] : edu.end || "",
-          },
-        ];
+      if (data.education) {
+        session.cvData.education = data.education;
       }
-
-      // Merge experience
-      if (data.experiencia || data.experience) {
-        const exp = data.experiencia || data.experience;
-        session.cvData.experience = [
-          {
-            position: exp.puesto || exp.position || "",
-            company: exp.empresa || exp.company || "",
-            start: exp.fechas ? exp.fechas.split(" - ")[0] : exp.start || "",
-            end: exp.fechas ? exp.fechas.split(" - ")[1] : exp.end || "",
-            responsibilities:
-              exp.responsabilidades || exp.responsibilities || "",
-          },
-        ];
+      if (data.experience) {
+        session.cvData.experience = data.experience;
       }
-
-      // Merge skills
-      if (data.habilidades || data.skills) {
-        const skills = data.habilidades || data.skills;
+      if (data.skills) {
         session.cvData.skills = {
-          technical: skills.tecnicas || skills.technical || [],
-          soft: skills.blandas || skills.soft || [],
+          technical: [...new Set([...session.cvData.skills.technical, ...(data.skills.technical || [])])],
+          soft: [...new Set([...session.cvData.skills.soft, ...(data.skills.soft || [])])]
         };
       }
     }
@@ -125,35 +99,43 @@ router.post("/send", async (req, res) => {
     session.chatHistory.push({ role: "assistant", content: aiResponse });
     updateSession(userId, session);
 
+    // Calculate current progress
+    const cvProgress = calculateCVProgress(session.cvData);
+
     res.json({
       message: aiResponse,
       cvData: session.cvData,
-      hasCompleteData: !!session.cvData.personal.name,
+      cvProgress
     });
+
   } catch (error) {
     console.error("Error processing message:", error);
-    res.status(500).json({ error: "Failed to process message" });
+    res.status(500).json({ 
+      error: error.message || "Failed to process message",
+      details: process.env.NODE_ENV === "development" ? error.stack : undefined
+    });
   }
 });
 
-// Add this new route
+// Check CV status
 router.get("/status/:userId", (req, res) => {
   try {
     const session = getSession(req.params.userId);
     if (!session) {
-      return res.status(404).json({ hasCompleteData: false });
+      return res.status(404).json({ 
+        hasCompleteData: false,
+        message: "Session not found"
+      });
     }
 
-    const hasCompleteData = !!(
-      session.cvData.personal?.name &&
-      session.cvData.education?.length > 0 &&
-      session.cvData.experience?.length > 0 &&
-      session.cvData.skills
-    );
-
-    res.json({ hasCompleteData });
+    const cvProgress = calculateCVProgress(session.cvData);
+    res.json(cvProgress);
   } catch (error) {
-    res.status(500).json({ hasCompleteData: false });
+    console.error("Status Check Error:", error);
+    res.status(500).json({ 
+      hasCompleteData: false,
+      error: "Error checking CV status"
+    });
   }
 });
 

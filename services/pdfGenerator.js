@@ -1,38 +1,5 @@
 const { PDFDocument, rgb, StandardFonts } = require('pdf-lib');
 
-// Helper functions
-function addSection(page, text, y, font) {
-  page.drawText(text, {
-    x: 50,
-    y: y,
-    size: 16,
-    font: font,
-    color: rgb(0.2, 0.4, 0.6)
-  });
-  return y - 25;
-}
-
-function addField(page, text, y, font) {
-  page.drawText(text, {
-    x: 50,
-    y: y,
-    size: 12,
-    font: font
-  });
-  return y - 20;
-}
-
-function addBulletPoint(page, text, y, font) {
-  page.drawText(text, {
-    x: 60,
-    y: y,
-    size: 11,
-    font: font
-  });
-  return y - 15;
-}
-
-// Main PDF generation function
 async function generateCVPDF(cvData) {
   // Create a new PDF document
   const pdfDoc = await PDFDocument.create();
@@ -49,69 +16,83 @@ async function generateCVPDF(cvData) {
   const lineHeight = 20;
   const sectionSpacing = 30;
 
+  // Helper function to add text with proper formatting
+  const addText = (text, size, isBold = false, yOffset = 0) => {
+    page.drawText(text, {
+      x: margin,
+      y: yPosition - yOffset,
+      size,
+      font: isBold ? fontBold : font,
+      color: isBold ? rgb(0.2, 0.4, 0.6) : rgb(0, 0, 0)
+    });
+    return size + 4;
+  };
+
   // Add header
-  page.drawText('Curriculum Vitae', {
-    x: margin,
-    y: yPosition,
-    size: 24,
-    font: fontBold,
-    color: rgb(0.2, 0.4, 0.6)
-  });
+  yPosition -= addText('Curriculum Vitae', 24, true);
   yPosition -= lineHeight * 2;
   
   // Add personal information section
-  yPosition = addSection(page, 'Información Personal', yPosition, fontBold);
-  yPosition = addField(page, `Nombre: ${cvData.personal?.name || cvData.personal?.nombre || ''}`, yPosition, font);
-  yPosition = addField(page, `Email: ${cvData.personal?.email || cvData.personal?.correo || ''}`, yPosition, font);
-  yPosition = addField(page, `Teléfono: ${cvData.personal?.phone || cvData.personal?.telefono || ''}`, yPosition, font);
-  yPosition = addField(page, `Ubicación: ${cvData.personal?.location || cvData.personal?.ubicacion || ''}`, yPosition, font);
+  yPosition -= addText('Información Personal', 16, true);
+  if (cvData.personal?.name) yPosition -= addText(`Nombre: ${cvData.personal.name}`, 12);
+  if (cvData.personal?.email) yPosition -= addText(`Email: ${cvData.personal.email}`, 12);
+  if (cvData.personal?.phone) yPosition -= addText(`Teléfono: ${cvData.personal.phone}`, 12);
+  if (cvData.personal?.location) yPosition -= addText(`Ubicación: ${cvData.personal.location}`, 12);
   yPosition -= sectionSpacing;
   
-  // Add education section (handles both structures)
-  yPosition = addSection(page, 'Educación', yPosition, fontBold);
-  const education = Array.isArray(cvData.education) ? cvData.education[0] : cvData.education;
-  if (education) {
-    yPosition = addField(page, `${education.degree || education.titulo || ''}`, yPosition, fontBold);
-    yPosition = addField(page, `${education.university || education.universidad || ''}`, yPosition, font);
-    yPosition = addField(page, `${education.start || education.fechas || ''}${education.end ? ` - ${education.end}` : ''}`, yPosition, font);
-  }
-  yPosition -= sectionSpacing;
-  
-  // Add experience section (handles both structures)
-  yPosition = addSection(page, 'Experiencia Laboral', yPosition, fontBold);
-  const experience = Array.isArray(cvData.experience) ? cvData.experience[0] : cvData.experiencia || cvData.experience;
-  if (experience) {
-    yPosition = addField(page, `${experience.position || experience.puesto || ''}`, yPosition, fontBold);
-    yPosition = addField(page, `${experience.company || experience.empresa || ''} | ${experience.start || experience.fechas || ''}${experience.end ? ` - ${experience.end}` : ''}`, yPosition, font);
-    
-    // Handle responsibilities in both formats
-    const responsibilities = experience.responsibilities || 
-                            (experience.responsabilidades ? experience.responsabilidades.split(';') : []);
-    for (const resp of responsibilities) {
-      if (resp.trim()) {
-        yPosition = addBulletPoint(page, `• ${resp.trim()}`, yPosition, font);
+  // Add education section
+  if (cvData.education?.length > 0) {
+    yPosition -= addText('Educación', 16, true);
+    cvData.education.forEach(edu => {
+      if (edu.degree) yPosition -= addText(edu.degree, 12, true);
+      if (edu.university) yPosition -= addText(edu.university, 12);
+      if (edu.dates || (edu.start && edu.end)) {
+        const dates = edu.dates || `${edu.start} - ${edu.end}`;
+        yPosition -= addText(dates, 12);
       }
-    }
+      yPosition -= lineHeight;
+    });
+    yPosition -= sectionSpacing;
   }
-  yPosition -= sectionSpacing;
   
-  // Add skills section (handles both structures)
-  yPosition = addSection(page, 'Habilidades', yPosition, fontBold);
-  const skills = cvData.skills || cvData.habilidades;
-  if (skills) {
-    const technical = skills.technical || skills.tecnicas || [];
-    const soft = skills.soft || skills.blandas || [];
-    
-    if (technical.length > 0) {
-      yPosition = addField(page, `Técnicas: ${technical.join(', ')}`, yPosition, font);
+  // Add experience section
+  if (cvData.experience?.length > 0) {
+    yPosition -= addText('Experiencia Laboral', 16, true);
+    cvData.experience.forEach(exp => {
+      if (exp.position) yPosition -= addText(exp.position, 12, true);
+      if (exp.company) yPosition -= addText(exp.company, 12);
+      if (exp.dates || (exp.start && exp.end)) {
+        const dates = exp.dates || `${exp.start} - ${exp.end}`;
+        yPosition -= addText(dates, 12);
+      }
+      if (exp.responsibilities) {
+        const responsibilities = Array.isArray(exp.responsibilities) 
+          ? exp.responsibilities 
+          : exp.responsibilities.split('\n');
+        responsibilities.forEach(resp => {
+          if (resp.trim()) {
+            yPosition -= addText(`• ${resp.trim()}`, 10, false, 15);
+          }
+        });
+      }
+      yPosition -= lineHeight;
+    });
+    yPosition -= sectionSpacing;
+  }
+  
+  // Add skills section
+  if (cvData.skills) {
+    yPosition -= addText('Habilidades', 16, true);
+    if (cvData.skills.technical?.length > 0) {
+      yPosition -= addText(`Técnicas: ${cvData.skills.technical.join(', ')}`, 12);
     }
-    if (soft.length > 0) {
-      yPosition = addField(page, `Blandas: ${soft.join(', ')}`, yPosition, font);
+    if (cvData.skills.soft?.length > 0) {
+      yPosition -= addText(`Blandas: ${cvData.skills.soft.join(', ')}`, 12);
     }
   }
   
   // Add footer
-  page.drawText('Generado con CV Builder - © 2024', {
+  page.drawText('Generado con CV Builder', {
     x: margin,
     y: 30,
     size: 10,
@@ -123,8 +104,5 @@ async function generateCVPDF(cvData) {
 }
 
 module.exports = {
-  generateCVPDF,
-  addSection,
-  addField,
-  addBulletPoint
+  generateCVPDF
 };
